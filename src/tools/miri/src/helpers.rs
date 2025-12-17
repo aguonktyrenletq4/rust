@@ -584,10 +584,9 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
             }
 
             fn aggregate_field_iter(
-                memory_index: &IndexVec<FieldIdx, u32>,
-            ) -> impl Iterator<Item = FieldIdx> + 'static {
-                let inverse_memory_index = memory_index.invert_bijective_mapping();
-                inverse_memory_index.into_iter()
+                inverse_memory_index: &IndexVec<u32, FieldIdx>,
+            ) -> impl Iterator<Item = FieldIdx> {
+                inverse_memory_index.iter().copied()
             }
 
             // Hook to detect `UnsafeCell`.

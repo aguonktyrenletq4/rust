@@ -714,7 +714,7 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
                 },
                 fields: FieldsShape::Arbitrary {
                     offsets: [niche_offset].into(),
-                    memory_index: [0].into(),
+                    inverse_memory_index: [FieldIdx::new(0)].into(),
                 },
                 backend_repr: abi,
                 largest_niche,
@@ -1008,8 +1008,8 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
                 let pair =
                     LayoutData::<FieldIdx, VariantIdx>::scalar_pair(&self.cx, tag, prim_scalar);
                 let pair_offsets = match pair.fields {
-                    FieldsShape::Arbitrary { ref offsets, ref memory_index } => {
-                        assert_eq!(memory_index.raw, [0, 1]);
+                    FieldsShape::Arbitrary { ref offsets, ref inverse_memory_index } => {
+                        assert_eq!(inverse_memory_index.raw, [FieldIdx::new(0), FieldIdx::new(1)]);
                         offsets
                     }
                     _ => panic!("encountered a non-arbitrary layout during enum layout"),
@@ -1061,7 +1061,7 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
             },
             fields: FieldsShape::Arbitrary {
                 offsets: [Size::ZERO].into(),
-                memory_index: [0].into(),
+                inverse_memory_index: [FieldIdx::new(0)].into(),
             },
             largest_niche,
             uninhabited,
@@ -1252,8 +1252,6 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
         // That is, if field 5 has offset 0, the first element of inverse_memory_index is 5.
         // We now write field offsets to the corresponding offset slot;
         // field 5 with offset 0 puts 0 in offsets[5].
-        // At the bottom of this function, we invert `inverse_memory_index` to
-        // produce `memory_index` (see `invert_mapping`).
         let mut unsized_field = None::<&F>;
         let mut offsets = IndexVec::from_elem(Size::ZERO, fields);
         let mut offset = Size::ZERO;
@@ -1322,18 +1320,6 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
 
         debug!("univariant min_size: {:?}", offset);
         let min_size = offset;
-        // As stated above, inverse_memory_index holds field indices by increasing offset.
-        // This makes it an already-sorted view of the offsets vec.
-        // To invert it, consider:
-        // If field 5 has offset 0, offsets[0] is 5, and memory_index[5] should be 0.
-        // Field 5 would be the first element, so memory_index is i:
-        // Note: if we didn't optimize, it's already right.
-        let memory_index = if optimize_field_order {
-            inverse_memory_index.invert_bijective_mapping()
-        } else {
-            debug_assert!(inverse_memory_index.iter().copied().eq(fields.indices()));
-            inverse_memory_index.into_iter().map(|it| it.index() as u32).collect()
-        };
         let size = min_size.align_to(align);
         // FIXME(oli-obk): deduplicate and harden these checks
         if size.bytes() >= dl.obj_size_bound() {
@@ -1389,8 +1375,14 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
                             let pair =
                                 LayoutData::<FieldIdx, VariantIdx>::scalar_pair(&self.cx, a, b);
                             let pair_offsets = match pair.fields {
-                                FieldsShape::Arbitrary { ref offsets, ref memory_index } => {
-                                    assert_eq!(memory_index.raw, [0, 1]);
+                                FieldsShape::Arbitrary {
+                                    ref offsets,
+                                    ref inverse_memory_index,
+                                } => {
+                                    assert_eq!(
+                                        inverse_memory_index.raw,
+                                        [FieldIdx::new(0), FieldIdx::new(1)]
+                                    );
                                     offsets
                                 }
                                 FieldsShape::Primitive
@@ -1434,7 +1426,7 @@ impl<Cx: HasDataLayout> LayoutCalculator<Cx> {
 
         Ok(LayoutData {
             variants: Variants::Single { index: VariantIdx::new(0) },
-            fields: FieldsShape::Arbitrary { offsets, memory_index },
+            fields: FieldsShape::Arbitrary { offsets, inverse_memory_index },
             backend_repr: abi,
             largest_niche,
             uninhabited,
@@ -1530,7 +1522,10 @@ where
 
     Ok(LayoutData {
         variants: Variants::Single { index: VariantIdx::new(0) },
-        fields: FieldsShape::Arbitrary { offsets: [Size::ZERO].into(), memory_index: [0].into() },
+        fields: FieldsShape::Arbitrary {
+            offsets: [Size::ZERO].into(),
+            inverse_memory_index: [FieldIdx::new(0)].into(),
+        },
         backend_repr: repr,
         largest_niche: elt.largest_niche,
         uninhabited: false,
