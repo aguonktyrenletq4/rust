@@ -182,9 +182,7 @@ pub(super) fn layout<
     // CoroutineLayout.
     debug!("prefix = {:#?}", prefix);
     let (outer_fields, promoted_offsets, promoted_memory_index) = match prefix.fields {
-        FieldsShape::Arbitrary { mut offsets, memory_index } => {
-            let mut inverse_memory_index = memory_index.invert_bijective_mapping();
-
+        FieldsShape::Arbitrary { mut offsets, inverse_memory_index } => {
             // "a" (`0..b_start`) and "b" (`b_start..`) correspond to
             // "outer" and "promoted" fields respectively.
             let b_start = tag_index.plus(1);
@@ -194,21 +192,21 @@ pub(super) fn layout<
             // Disentangle the "a" and "b" components of `inverse_memory_index`
             // by preserving the order but keeping only one disjoint "half" each.
             // FIXME(eddyb) build a better abstraction for permutations, if possible.
-            let inverse_memory_index_b: IndexVec<u32, FieldIdx> = inverse_memory_index
-                .iter()
-                .filter_map(|&i| i.index().checked_sub(b_start.index()).map(FieldIdx::new))
-                .collect();
-            inverse_memory_index.raw.retain(|&i| i.index() < b_start.index());
-            let inverse_memory_index_a = inverse_memory_index;
+            let mut inverse_memory_index_a = IndexVec::<u32, FieldIdx>::new();
+            let mut inverse_memory_index_b = IndexVec::<u32, FieldIdx>::new();
+            for i in inverse_memory_index {
+                if let Some(j) = i.index().checked_sub(b_start.index()) {
+                    inverse_memory_index_b.push(FieldIdx::new(j));
+                } else {
+                    inverse_memory_index_a.push(i);
+                }
+            }
 
-            // Since `inverse_memory_index_{a,b}` each only refer to their
-            // respective fields, they can be safely inverted
-            let memory_index_a = inverse_memory_index_a.invert_bijective_mapping();
-            let memory_index_b = inverse_memory_index_b.invert_bijective_mapping();
-
-            let outer_fields =
-                FieldsShape::Arbitrary { offsets: offsets_a, memory_index: memory_index_a };
-            (outer_fields, offsets_b, memory_index_b)
+            let outer_fields = FieldsShape::Arbitrary {
+                offsets: offsets_a,
+                inverse_memory_index: inverse_memory_index_a,
+            };
+            (outer_fields, offsets_b, inverse_memory_index_b.invert_bijective_mapping())
         }
         _ => unreachable!(),
     };
@@ -236,7 +234,7 @@ pub(super) fn layout<
             )?;
             variant.variants = Variants::Single { index };
 
-            let FieldsShape::Arbitrary { offsets, memory_index } = variant.fields else {
+            let FieldsShape::Arbitrary { offsets, inverse_memory_index } = variant.fields else {
                 unreachable!();
             };
 
@@ -249,6 +247,7 @@ pub(super) fn layout<
             // promoted fields were being used, but leave the elements not in the
             // subset as `invalid_field_idx`, which we can filter out later to
             // obtain a valid (bijective) mapping.
+            let memory_index = inverse_memory_index.invert_bijective_mapping();
             let invalid_field_idx = promoted_memory_index.len() + memory_index.len();
             let mut combined_inverse_memory_index =
                 IndexVec::from_elem_n(FieldIdx::new(invalid_field_idx), invalid_field_idx);
@@ -273,14 +272,13 @@ pub(super) fn layout<
                 })
                 .collect();
 
-            // Remove the unused slots and invert the mapping to obtain the
-            // combined `memory_index` (also see previous comment).
+            // Remove the unused slots to obtain the combined `inverse_memory_index`
+            // (also see previous comment).
             combined_inverse_memory_index.raw.retain(|&i| i.index() != invalid_field_idx);
-            let combined_memory_index = combined_inverse_memory_index.invert_bijective_mapping();
 
             variant.fields = FieldsShape::Arbitrary {
                 offsets: combined_offsets,
-                memory_index: combined_memory_index,
+                inverse_memory_index: combined_inverse_memory_index,
             };
 
             size = size.max(variant.size);

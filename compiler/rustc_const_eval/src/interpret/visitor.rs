@@ -4,7 +4,7 @@
 use std::num::NonZero;
 
 use rustc_abi::{FieldIdx, FieldsShape, VariantIdx, Variants};
-use rustc_index::IndexVec;
+use rustc_index::{Idx as _, IndexVec};
 use rustc_middle::mir::interpret::InterpResult;
 use rustc_middle::ty::{self, Ty};
 use tracing::trace;
@@ -27,13 +27,15 @@ pub trait ValueVisitor<'tcx, M: Machine<'tcx>>: Sized {
     /// This function provides the chance to reorder the order in which fields are visited for
     /// `FieldsShape::Aggregate`.
     ///
-    /// The default means we iterate in source declaration order; alternatively this can do some
-    /// work with `memory_index` to iterate in memory order.
+    /// The default means we iterate in source declaration order; alternatively this can use
+    /// `inverse_memory_index` to iterate in memory order.
     #[inline(always)]
     fn aggregate_field_iter(
-        memory_index: &IndexVec<FieldIdx, u32>,
-    ) -> impl Iterator<Item = FieldIdx> + 'static {
-        memory_index.indices()
+        inverse_memory_index: &IndexVec<u32, FieldIdx>,
+    ) -> impl Iterator<Item = FieldIdx> {
+        // Allow the optimizer to elide the bounds checking when creating each index.
+        let _ = FieldIdx::new(inverse_memory_index.len());
+        (0..inverse_memory_index.len()).map(FieldIdx::new)
     }
 
     // Recursive actions, ready to be overloaded.
@@ -168,8 +170,8 @@ pub trait ValueVisitor<'tcx, M: Machine<'tcx>>: Sized {
             &FieldsShape::Union(fields) => {
                 self.visit_union(v, fields)?;
             }
-            FieldsShape::Arbitrary { memory_index, .. } => {
-                for idx in Self::aggregate_field_iter(memory_index) {
+            FieldsShape::Arbitrary { inverse_memory_index, .. } => {
+                for idx in Self::aggregate_field_iter(inverse_memory_index) {
                     let field = self.ecx().project_field(v, idx)?;
                     self.visit_field(v, idx.as_usize(), &field)?;
                 }
